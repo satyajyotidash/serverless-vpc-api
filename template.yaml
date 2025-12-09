@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Simple Serverless VPC API (REST) with Cognito auth
+
+Resources:
+  VpcTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: VpcRecords
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: vpcId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: vpcId
+          KeyType: HASH
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: VpcApiUserPool
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: VpcApiClient
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+
+  CreateVpcFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: create_vpc.handler
+      Runtime: python3.11
+      CodeUri: .
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ec2:CreateVpc
+                - ec2:DescribeVpcs
+                - ec2:CreateSubnet
+                - ec2:DescribeAvailabilityZones
+                - ec2:CreateTags
+                - ec2:ModifyVpcAttribute
+                - ec2:CreateInternetGateway
+                - ec2:AttachInternetGateway
+                - ec2:CreateRouteTable
+                - ec2:CreateRoute
+                - ec2:AssociateRouteTable
+              Resource: "*"
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VpcTable
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref VpcTable
+      Events:
+        CreateApi:
+          Type: Api
+          Properties:
+            Path: /create
+            Method: post
+            RestApiId: !Ref ServerlessRestApi
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  GetVpcFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: get_vpc.handler
+      Runtime: python3.11
+      CodeUri: .
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Scan
+              Resource: !GetAtt VpcTable.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref VpcTable
+      Events:
+        GetApi:
+          Type: Api
+          Properties:
+            Path: /vpcs
+            Method: get
+            RestApiId: !Ref ServerlessRestApi
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: CognitoAuthorizer
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      RestApiId: !Ref ServerlessRestApi
+      ProviderARNs:
+        - !GetAtt UserPool.Arn
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
